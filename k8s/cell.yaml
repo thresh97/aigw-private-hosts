@@ -1,0 +1,47 @@
+# One mock cell: Deployment (1 pod) + Service. deploy.sh renders it once per cell, replacing __CELL__ and __NS__.
+# Each cell has its own ClusterIP, pod IP and DNS names, so one gateway env-var state covers every trust state.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mock-__CELL__
+  namespace: __NS__
+  labels: {app: aigw-private-hosts-mock, cell: __CELL__}
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: aigw-private-hosts-mock, cell: __CELL__}
+  template:
+    metadata:
+      labels: {app: aigw-private-hosts-mock, cell: __CELL__}
+    spec:
+      automountServiceAccountToken: false
+      securityContext: {runAsNonRoot: true, runAsUser: 65534, runAsGroup: 65534}
+      containers:
+        - name: mock
+          image: docker.io/library/python:3.12-alpine
+          command: ["python", "-u", "/app/server.py"]
+          env:
+            - {name: CELL, value: __CELL__}
+            - {name: PORT, value: "8080"}
+          ports: [{containerPort: 8080}]
+          readinessProbe:
+            tcpSocket: {port: 8080}
+            periodSeconds: 5
+          resources:
+            requests: {cpu: 10m, memory: 32Mi}
+            limits: {cpu: 200m, memory: 64Mi}
+          securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
+          volumeMounts: [{name: app, mountPath: /app}]
+      volumes:
+        - name: app
+          configMap: {name: aigw-private-hosts-mock}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mock-__CELL__
+  namespace: __NS__
+  labels: {app: aigw-private-hosts-mock, cell: __CELL__}
+spec:
+  selector: {app: aigw-private-hosts-mock, cell: __CELL__}
+  ports: [{port: 80, targetPort: 8080}]

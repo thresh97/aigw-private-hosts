@@ -1,0 +1,6 @@
+# Tenant addresses and results, never committed
+hosts*.tsv
+results/
+CLAUDE.local.md
+__pycache__/
+*.gif

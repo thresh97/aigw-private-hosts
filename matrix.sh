@@ -59,7 +59,7 @@ case ${1:-} in
   cleanup)
     "${AI[@]}" list --output json 2>/dev/null | jq -r '.[] | select(.slug | startswith("tth-")) | "\(.id)\t\(.slug)"' |
       while IFS=$'\t' read -r id slug; do
-        "${AI[@]}" delete "$id" --force >/dev/null 2>&1 && printf 'deleted\t%s\n' "$slug" || printf 'delete-failed\t%s\n' "$slug"
+        "${AI[@]}" delete "$id" --organisation-id "$TSG" --force >/dev/null 2>&1 && printf 'deleted\t%s\n' "$slug" || printf 'delete-failed\t%s\n' "$slug"
       done ;;
   *) sed -n '2,13p' "$0"; exit 1 ;;
 esac

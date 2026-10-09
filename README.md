@@ -128,14 +128,15 @@ request, with header values masked; read them with `kubectl logs -n aigw-mock -l
 | 2. Add the SCM entries | airs-cli host | `MGMT_CREDS_FILE=<tenant json> bash matrix.sh scm-add hosts.tsv` |
 | 3. Save the integrations | airs-cli host | `MGMT_CREDS_FILE=… WS_ID=<workspace uuid> bash matrix.sh save hosts.tsv > results/saved.tsv` |
 | 4. Probe, env var unchanged | gateway client | `GW_URL=https://<gateway> GW_KEY=<key or JWT> bash probe.sh results/saved.tsv before-env >> results/probe.tsv` |
-| 5. Add the env-var hosts | gateway deploy | append `bash matrix.sh env hosts.tsv` to `TRUSTED_CUSTOM_HOSTS` and redeploy the gateway |
+| 5. Add the env-var hosts | gateway deploy | `bash matrix.sh env hosts.tsv \| tee results/env.txt`, append that to `TRUSTED_CUSTOM_HOSTS` and redeploy the gateway. If you change the env var again later, save each value the same way (`results/env2.txt`, …) |
 | 6. Probe again | gateway client | `… bash probe.sh results/saved.tsv after-env >> results/probe.tsv` |
-| 7. Optional: remove the SCM entries, probe again | both | `matrix.sh scm-del`, then `probe.sh … after-scm-del` |
+| 7. Optional: remove the SCM entries, probe and edit again | both | `matrix.sh scm-del`, then `probe.sh … after-scm-del` and `matrix.sh edit > results/edit.tsv` |
 | 8. Clean up | all | revert the env var and redeploy; `matrix.sh scm-del`; `matrix.sh cleanup`; `KCTX=<ctx> bash teardown.sh` |
 
 The `matrix.sh save` output records whether SCM accepted each custom host, and the reason when it refused. In `probe.sh`
 output, each row is `reached` (the mock answered), `refused` (the gateway returned "Invalid custom host") or `error`
-(for example the gateway's DNS-rebinding block, or a name that doesn't resolve).
+(for example the gateway's DNS-rebinding block, or a name that doesn't resolve). `matrix.sh edit` output has one row
+per integration and edit kind (`description`, or `base-url` re-set to the same URL): `ok`, or `refused` with the reason.
 
 `matrix.sh` tags everything it creates: allowlist entries get the description `aigw-private-hosts` and integrations get
 the `tth-` slug prefix. `scm-del` and `cleanup` delete only tagged objects.

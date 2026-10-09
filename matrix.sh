@@ -5,6 +5,7 @@
 #   bash matrix.sh save     hosts.tsv     # create one tth-<cell>-<form> integration per row (+ tth-public); TSV of save results
 #   bash matrix.sh env      hosts.tsv     # print the TRUSTED_CUSTOM_HOSTS additions for the env/both cells
 #   bash matrix.sh scm-del                # delete allowlist entries whose description is "$TAG"
+#   bash matrix.sh edit                   # try a description edit and a base-URL edit on each saved tth-*-ip integration
 #   bash matrix.sh cleanup                # delete every tth-* integration
 #
 # hosts.tsv comes from deploy.sh: cell form url host. Cells: none (no list), scm (SCM list only), env (env var only),
@@ -56,10 +57,24 @@ case ${1:-} in
         printf '%s\t%s\t%s\trejected\t%s\n' "$slug" "$cell" "$url" "$(sed -E 's/.*(Error|Invalid)[: ]*//' <<<"$out" | cut -c1-120)"
       fi
     done ;;
+  edit)  # run after scm-del: does an integration whose SCM entry is gone still accept edits?
+    "${AI[@]}" list --output json 2>/dev/null |
+      jq -r '.[] | select(.slug | test("^tth-.*-ip$")) | "\(.id)\t\(.slug)\t\(.configurations.custom_host // "-")"' |
+      while IFS=$'\t' read -r id slug url; do
+        for kind in description base-url; do
+          [ "$kind" = base-url ] && [ "$url" = - ] && { printf '%s\t%s\t-\tskipped\tno custom_host in list output\n' "$slug" "$kind"; continue; }
+          if [ "$kind" = description ]; then args=(--description "$TAG (edited)"); else args=(--base-url "$url"); fi
+          if out=$("${AI[@]}" update "$id" "${args[@]}" --output json 2>&1); then
+            printf '%s\t%s\t%s\tok\t-\n' "$slug" "$kind" "$url"
+          else
+            printf '%s\t%s\t%s\trefused\t%s\n' "$slug" "$kind" "$url" "$(tr -d '\n' <<<"$out" | sed -E 's/.*(Error|Invalid)[: ]*//' | cut -c1-120)"
+          fi
+        done
+      done ;;
   cleanup)
     "${AI[@]}" list --output json 2>/dev/null | jq -r '.[] | select(.slug | startswith("tth-")) | "\(.id)\t\(.slug)"' |
       while IFS=$'\t' read -r id slug; do
         "${AI[@]}" delete "$id" --organisation-id "$TSG" --force >/dev/null 2>&1 && printf 'deleted\t%s\n' "$slug" || printf 'delete-failed\t%s\n' "$slug"
       done ;;
-  *) sed -n '2,13p' "$0"; exit 1 ;;
+  *) sed -n '2,14p' "$0"; exit 1 ;;
 esac

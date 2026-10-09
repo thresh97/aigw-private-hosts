@@ -58,11 +58,11 @@ case ${1:-} in
       fi
     done ;;
   edit)  # run after scm-del: does an integration whose SCM entry is gone still accept edits?
-    "${AI[@]}" list --output json 2>/dev/null |
-      jq -r '.[] | select(.slug | test("^tth-.*-ip$")) | "\(.id)\t\(.slug)\t\(.configurations.custom_host // "-")"' |
-      while IFS=$'\t' read -r id slug url; do
+    "${AI[@]}" list --output json 2>/dev/null | jq -r '.[] | select(.slug | test("^tth-.*-ip$")) | "\(.id)\t\(.slug)"' |
+      while IFS=$'\t' read -r id slug; do
+        url=$("${AI[@]}" get "$id" --output json 2>/dev/null | jq -r '.configurations.custom_host // "-"')  # list omits configurations
         for kind in description base-url; do
-          [ "$kind" = base-url ] && [ "$url" = - ] && { printf '%s\t%s\t-\tskipped\tno custom_host in list output\n' "$slug" "$kind"; continue; }
+          [ "$kind" = base-url ] && [ "$url" = - ] && { printf '%s\t%s\t-\tskipped\tno custom_host\n' "$slug" "$kind"; continue; }
           if [ "$kind" = description ]; then args=(--description "$TAG (edited)"); else args=(--base-url "$url"); fi
           if out=$("${AI[@]}" update "$id" "${args[@]}" --output json 2>&1); then
             printf '%s\t%s\t%s\tok\t-\n' "$slug" "$kind" "$url"

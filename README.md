@@ -33,7 +33,7 @@ one does what, so this kit tests every combination:
 
 ## Summary
 
-Tested on gateway 2.26.0 (2026-10-06) in one lab tenant; behaviour may change in later releases. Details are in
+Tested on gateway 2.26.0 (2026-10-06) and 2.27.0 (2026-10-09), in two lab tenants; behaviour may change in later releases. Details are in
 [Findings](#findings).
 
 | | SCM org allowlist | `TRUSTED_CUSTOM_HOSTS` env var |
@@ -54,8 +54,8 @@ In practice:
 | `*.svc.cluster.local`, `*.compute.internal`, `*.ec2.internal` | `cluster.local` saves without an entry; the others need one | **never works**: the gateway refuses these even when trusted |
 | Public host | not needed | not needed |
 
-¹ With an env entry, the gateway passed its trust check for `*.example.corp` but stopped at DNS lookup (the test name
-doesn't exist), so no request was actually delivered for this row.
+¹ With an env entry, the gateway passed its trust check for `.corp`, `.lan` and `.internal` names but stopped at DNS
+lookup (the test names don't exist), so no request was actually delivered for this row.
 
 ## What you need
 
@@ -151,8 +151,9 @@ them all.
 
 ## Findings
 
-Tested 2026-10-06 against gateway 2.26.0 on EKS. Everything below was observed through the API and the probe, except
-where marked *(image inspection)*.
+Tested 2026-10-06 against gateway 2.26.0 and 2026-10-09 against 2.27.0, on EKS in two lab tenants, with the same
+results. Everything below was observed through the API and the probe, except where marked *(image inspection)* or
+*(2.26.0 only)*.
 
 The control plane checks the SCM list when an integration is saved. The gateway checks only `TRUSTED_CUSTOM_HOSTS`,
 when it is called. *(image inspection)* The bundled code in the 2.26.0 and 2.27.0 gateway images has no reference to
@@ -171,7 +172,7 @@ the egress allowlist; `TRUSTED_CUSTOM_HOSTS` is its only custom-host trust setti
 
 What the SCM list itself accepts:
 - Accepted: exact hosts, IP literals and `*.` wildcards, including very broad ones like `*.com` and `*.internal`.
-- Refused: comma lists, CIDRs, a bare `*`, `169.254.169.254`, `metadata.google.internal` and a `nip.io` name.
+- Refused: comma lists, CIDRs, a port (`host:port`), a scheme or URL, a bare `*`, `169.254.169.254`, `metadata.google.internal` and a `nip.io` name.
 
 **Calling the integration (gateway)**
 
@@ -181,9 +182,9 @@ What the SCM list itself accepts:
 | Private IP | refused, "Invalid custom host" | **reached**, but only if SCM let it be saved first. Removing the SCM entry later doesn't affect calls. |
 | `<svc>.<ns>.svc`, `<svc>.<ns>` | refused (DNS-rebinding block) | **reached** (exact entry) |
 | `*.svc.cluster.local`, `*.compute.internal` | refused | **still refused**, with exact or wildcard entries |
-| `*.ec2.internal` | refused | **still refused** (wildcard entry) |
-| Other private names (`*.example.corp`) | refused | passes the gateway check (the env wildcard works; the test name doesn't resolve) |
-| `localhost`, `127.0.0.1`, other `.lan` / `.internal` | refused | not tested |
+| `*.ec2.internal` | refused | **still refused**, with a wildcard entry |
+| Other private names (`.corp`, `.lan`, other `.internal`) | refused | passes the gateway check (the env wildcard works; the test names don't resolve) |
+| `localhost`, `127.0.0.1` | refused | passes the gateway check, and the gateway connects to **its own** loopback (inside the gateway pod) |
 | SCM entry only, any form | refused | – |
 
 The "still refused" rows match the documented [blocked hostname suffixes](https://portkey.ai/docs/product/ai-gateway/custom-hosts#blocked-hostname-suffixes), which
@@ -199,7 +200,8 @@ What this means:
 - **Private IPs need both lists:** the SCM list so the integration can be saved, and `TRUSTED_CUSTOM_HOSTS` so the gateway will call it.
 - **Use a name the gateway can trust.** In-cluster LLM upstreams should be addressed as `<svc>.<ns>.svc` or `<svc>.<ns>`, not `.svc.cluster.local`. Both save without an SCM entry and need only an env entry.
 - **SCM accepts integrations that can never work.** It saves `.svc.cluster.local` hosts with no list entry, and `*.compute.internal` hosts once listed, but the gateway always refuses them.
-- **MCP is different.** In the same deployment, MCP servers on `*.<gateway-namespace>.svc.cluster.local` work through the gateway's MCP endpoint with an env wildcard, so this denylist doesn't apply to the MCP path. Not tested further here.
+- **Don't trust loopback.** `127.0.0.1` or `localhost` in `TRUSTED_CUSTOM_HOSTS` (plus an SCM entry) lets an integration reach whatever listens on the gateway pod's own loopback.
+- **MCP is different.** *(2.26.0 only)* In the same deployment, MCP servers on `*.<gateway-namespace>.svc.cluster.local` work through the gateway's MCP endpoint with an env wildcard, so this denylist doesn't apply to the MCP path. Not tested further here.
 
 ## Future work
 

@@ -24,8 +24,9 @@ names the address the gateway dialled, so every result is observed, not inferred
 
 ## Why?
 
-The SCM allowlist is new and lightly documented, and the gateway still has its own trust list. It isn't obvious which
-one does what, so this kit tests every combination:
+SCM refuses to save an integration whose custom host is a private IP or internal name (AB01), and used to offer no way
+around that. A new SCM setting, the org egress allowlist, now allows them. It is lightly documented, and the gateway
+still has its own trust list. It isn't obvious which one does what, so this kit tests every combination:
 
 - Which custom hosts can be **saved** in an integration, with and without an SCM entry?
 - Which ones does the gateway **call**, with and without a `TRUSTED_CUSTOM_HOSTS` entry?

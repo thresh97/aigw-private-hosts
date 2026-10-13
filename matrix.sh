@@ -3,14 +3,18 @@
 #
 #   bash matrix.sh scm-add  hosts.tsv     # add every scm/both host to the org egress allowlist (SCM trust list)
 #   bash matrix.sh save     hosts.tsv     # create one tth-<cell>-<form> integration per row (+ tth-public); TSV of save results
+#   bash matrix.sh wh-save  hosts.tsv     # per row (+ tth-wh-public): a webhook guardrail on <url>/webhook, a config that
+#                                         # runs it and a service key (secret in $STATE); TSV of save results
 #   bash matrix.sh env      hosts.tsv     # print the TRUSTED_CUSTOM_HOSTS additions for the env/both cells
 #   bash matrix.sh scm-del                # delete allowlist entries whose description is "$TAG"
 #   bash matrix.sh edit                   # try a description edit and a base-URL edit on each saved tth-*-ip integration
-#   bash matrix.sh cleanup                # delete every tth-* integration
+#   bash matrix.sh cleanup                # delete every tth-* integration, and the tth-wh-* keys, configs and guardrails
 #
 # hosts.tsv comes from deploy.sh: cell form url host. Cells: none (no list), scm (SCM list only), env (env var only),
 # both. Env: MGMT_CREDS_FILE (airs-cli tenant config JSON: mgmtClientId/Secret/TsgId), WS_ID (workspace UUID the
-# probe's gateway key uses), PUBLIC_URL (control, default https://httpbin.org/anything), TAG.
+# probe's gateway key uses), PUBLIC_URL (control, default https://httpbin.org/anything), PUBLIC_WEBHOOK_URL (webhook
+# control, default the same), TAG, STATE (key secrets and ids for wh-save, default ~/.local/state/aigw-private-hosts;
+# never commit or copy it).
 set -euo pipefail
 : "${MGMT_CREDS_FILE:?set MGMT_CREDS_FILE (airs-cli tenant config JSON)}"
 TSG=$(jq -r .mgmtTsgId "$MGMT_CREDS_FILE")
@@ -18,6 +22,8 @@ TAG=${TAG:-aigw-private-hosts}
 PUBLIC_URL=${PUBLIC_URL:-https://httpbin.org/anything}
 ALLOW=https://api.apps.paloaltonetworks.com/ai_gw/admin/v2/egress-allowlist
 AI=(airs-cli --quiet aigateway integrations)
+GW=(airs-cli --quiet aigateway)
+STATE=${STATE:-$HOME/.local/state/aigw-private-hosts}
 
 token() {  # SCM bearer token; stays in the caller's variable, never printed
   curl -s -X POST https://auth.apps.paloaltonetworks.com/oauth2/access_token \
@@ -57,6 +63,29 @@ case ${1:-} in
         printf '%s\t%s\t%s\trejected\t%s\n' "$slug" "$cell" "$url" "$(sed -E 's/.*(Error|Invalid)[: ]*//' <<<"$out" | cut -c1-120)"
       fi
     done ;;
+  wh-save)
+    : "${WS_ID:?set WS_ID (workspace UUID)}"; mkdir -p "$STATE" && chmod 700 "$STATE"
+    ACTIONS='{"deny":true,"async":false,"on_success":{"feedback":{"value":1,"weight":1,"metadata":""}},
+      "on_fail":{"feedback":{"value":-1,"weight":1,"metadata":""}}}'
+    { awk -F'\t' -v OFS='\t' '{sub(/\/v1$/, "/webhook", $3); print}' "$2"
+      printf 'public\tpublic\t%s\t-\n' "${PUBLIC_WEBHOOK_URL:-$PUBLIC_URL}"; } | while IFS=$'\t' read -r cell form url _; do
+      slug=tth-wh-$cell-$form; [ "$cell" = public ] && slug=tth-wh-public
+      checks=$(jq -cn --arg u "$url" '[{id: "default.webhook", parameters: {webhookURL: $u, timeout: 3000, failOnError: true}}]')
+      if ! gr=$("${GW[@]}" guardrails create --workspace "$WS_ID" --name "$slug" --checks "$checks" --actions "$ACTIONS" --output json 2>&1); then
+        printf '%s\t%s\t%s\trejected\t%s\n' "$slug" "$cell" "$url" "$(tr -d '\n' <<<"$gr" | sed -E 's/.*(Error|Invalid)[: ]*//' | cut -c1-120)"
+        continue
+      fi
+      jq -n --arg gr "$(jq -r .id <<<"$gr")" '{guardrail: $gr}' > "$STATE/$slug.ids"
+      # Upstream is never reached: the mock's webhook answers verdict false, and a refused URL fails closed.
+      cfg=$("${GW[@]}" configs create --workspace "$WS_ID" --name "$slug" --set "config=$(jq -cn --arg g "$(jq -r .slug <<<"$gr")" \
+        '{provider: "openai", retry: {attempts: 1}, input_guardrails: [$g]}')" --output json)
+      jq --arg c "$(jq -r .id <<<"$cfg")" '. + {config: $c}' "$STATE/$slug.ids" > "$STATE/$slug.tmp" && mv "$STATE/$slug.tmp" "$STATE/$slug.ids"
+      (umask 077; "${GW[@]}" api-keys service create --type workspace --workspace "$WS_ID" --organisation-id "$TSG" \
+        --name "$slug" --scopes completions.write --set "defaults={\"config_id\":\"$(jq -r .id <<<"$cfg")\"}" \
+        --secret-output "$STATE/$slug.key" --output json >/dev/null)
+      jq --arg k "$(jq -r .id "$STATE/$slug.key")" '. + {key: $k}' "$STATE/$slug.ids" > "$STATE/$slug.tmp" && mv "$STATE/$slug.tmp" "$STATE/$slug.ids"
+      printf '%s\t%s\t%s\tsaved\t-\n' "$slug" "$cell" "$url"
+    done ;;
   edit)  # run after scm-del: does an integration whose SCM entry is gone still accept edits?
     "${AI[@]}" list --output json 2>/dev/null | jq -r '.[] | select(.slug | test("^tth-.*-ip$")) | "\(.id)\t\(.slug)"' |
       while IFS=$'\t' read -r id slug; do
@@ -75,6 +104,14 @@ case ${1:-} in
     "${AI[@]}" list --output json 2>/dev/null | jq -r '.[] | select(.slug | startswith("tth-")) | "\(.id)\t\(.slug)"' |
       while IFS=$'\t' read -r id slug; do
         "${AI[@]}" delete "$id" --organisation-id "$TSG" --force >/dev/null 2>&1 && printf 'deleted\t%s\n' "$slug" || printf 'delete-failed\t%s\n' "$slug"
-      done ;;
-  *) sed -n '2,14p' "$0"; exit 1 ;;
+      done
+    for f in "$STATE"/tth-wh-*.ids; do
+      [ -f "$f" ] || continue; slug=$(basename "$f" .ids); ok=1
+      id=$(jq -r '.key // empty' "$f"); [ -z "$id" ] || "${GW[@]}" api-keys service delete "$id" --force >/dev/null 2>&1 || ok=
+      id=$(jq -r '.config // empty' "$f"); [ -z "$id" ] || "${GW[@]}" configs delete "$id" --force >/dev/null 2>&1 || ok=
+      id=$(jq -r '.guardrail // empty' "$f"); [ -z "$id" ] || "${GW[@]}" guardrails delete "$id" --force >/dev/null 2>&1 || ok=
+      if [ -n "$ok" ]; then rm -f "$f"; shred -u "$STATE/$slug.key" 2>/dev/null || rm -f "$STATE/$slug.key"; printf 'deleted\t%s\n' "$slug"
+      else printf 'delete-failed\t%s\n' "$slug"; fi
+    done ;;
+  *) sed -n '2,19p' "$0"; exit 1 ;;
 esac

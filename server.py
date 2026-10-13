@@ -2,7 +2,8 @@
 
 Runs in-cluster (stdlib only). Answers OpenAI POST .../chat/completions and Anthropic POST .../messages with a canned
 reply whose text names the cell (env CELL) and the Host it was reached on, so a gateway response shows which address
-the gateway actually dialled. Anything else gets a JSON 404 that also names the cell. Logs one JSON line per request to
+the gateway actually dialled. As a webhook guardrail (POST .../webhook) it answers {"verdict": false} with the same
+text in "data", so the gateway's 446 shows it. Anything else gets a JSON 404 that also names the cell. Logs one JSON line per request to
 stdout: cell, host, method, path, model, and header names with masked values.
 """
 
@@ -51,6 +52,8 @@ class Handler(BaseHTTPRequestHandler):
                                    "choices": [{"index": 0, "message": {"role": "assistant", "content": text},
                                                 "finish_reason": "stop"}],
                                    "usage": {"prompt_tokens": 10, "completion_tokens": 1, "total_tokens": 11}})
+        if self.command == "POST" and path.endswith("/webhook"):  # webhook guardrail: block, naming the address dialled
+            return self.send(200, {"verdict": False, "data": {"mock": text}})
         if self.command == "POST" and path.endswith("/messages"):
             return self.send(200, {"id": "msg_mock_" + uuid.uuid4().hex[:12], "type": "message", "role": "assistant",
                                    "model": req.get("model") or "mock", "content": [{"type": "text", "text": text}],

@@ -118,7 +118,14 @@ it as model `@<slug>/gpt-4o`. Saved integrations are used rather than the `x-por
 can block inline config, and because saving is where the SCM list is checked.
 
 The mock (`server.py`, stdlib only) answers OpenAI `…/chat/completions` and Anthropic `…/messages`. Its reply text is
-`mock cell=<cell> host=<Host>`, so the gateway's response shows which address it dialled. It logs one JSON line per
+`mock cell=<cell> host=<Host>`, so the gateway's response shows which address it dialled.
+
+**Webhook guardrail URLs** use the same cells and host forms, with `/webhook` in place of `/v1`. `matrix.sh wh-save`
+creates, per row, a webhook guardrail (`tth-wh-<cell>-<form>`, `failOnError: true`), a config that runs it as an input
+guardrail, and a service key for that config. The mock answers the webhook with `verdict: false` and its usual text, so
+a reached webhook shows up as a 446 that names the address. A refused URL also gives a 446, with the gateway's reason
+instead. Either way the config's upstream is never called. `tth-wh-public` (`PUBLIC_WEBHOOK_URL`, default `PUBLIC_URL`)
+is the public control. It logs one JSON line per
 request, with header values masked; read them with `kubectl logs -n aigw-mock -l app=aigw-private-hosts-mock`.
 
 ## Run
@@ -128,7 +135,8 @@ request, with header values masked; read them with `kubectl logs -n aigw-mock -l
 | 1. Deploy the mock | kubectl host | `KCTX=<ctx> bash deploy.sh > hosts.tsv` |
 | 2. Add the SCM entries | airs-cli host | `MGMT_CREDS_FILE=<tenant json> bash matrix.sh scm-add hosts.tsv` |
 | 3. Save the integrations | airs-cli host | `MGMT_CREDS_FILE=… WS_ID=<workspace uuid> bash matrix.sh save hosts.tsv > results/saved.tsv` |
-| 4. Probe, env var unchanged | gateway client | `GW_URL=https://<gateway> GW_KEY=<key or JWT> bash probe.sh results/saved.tsv before-env >> results/probe.tsv` |
+| 3b. Optional: save the webhook guardrails | airs-cli host | `MGMT_CREDS_FILE=… WS_ID=… bash matrix.sh wh-save hosts.tsv > results/wh-saved.tsv` |
+| 4. Probe, env var unchanged | gateway client | `GW_URL=https://<gateway> GW_KEY=<key or JWT> bash probe.sh results/saved.tsv before-env >> results/probe.tsv` (and `probe.sh results/wh-saved.tsv before-env >> results/wh-probe.tsv`, same host as 3b: it reads the keys from `$STATE`) |
 | 5. Add the env-var hosts | gateway deploy | `bash matrix.sh env hosts.tsv \| tee results/env.txt`, append that to `TRUSTED_CUSTOM_HOSTS` and redeploy the gateway. If you change the env var again later, save each value the same way (`results/env2.txt`, …) |
 | 6. Probe again | gateway client | `… bash probe.sh results/saved.tsv after-env >> results/probe.tsv` |
 | 7. Optional: remove the SCM entries, probe and edit again | both | `matrix.sh scm-del`, then `probe.sh … after-scm-del` and `matrix.sh edit > results/edit.tsv` |
@@ -140,7 +148,10 @@ output, each row is `reached` (the mock answered), `refused` (the gateway return
 per integration and edit kind (`description`, or `base-url` re-set to the same URL): `ok`, or `refused` with the reason.
 
 `matrix.sh` tags everything it creates: allowlist entries get the description `aigw-private-hosts` and integrations get
-the `tth-` slug prefix. `scm-del` and `cleanup` delete only tagged objects.
+the `tth-` slug prefix. Webhook guardrails, configs and keys are named `tth-wh-*`, and their ids are kept in `$STATE`
+(default `~/.local/state/aigw-private-hosts`, with the key secrets). `scm-del` and `cleanup` delete only tagged objects
+(`cleanup` deletes the `tth-wh-*` objects recorded in `$STATE`). Every probe request carries a readable
+`x-portkey-trace-id` (`aigw-private-hosts-<label>-<slug>`).
 
 Pod IPs change if a pod restarts, so keep the mock pods up between steps 1 and 8. The mock costs almost nothing to run:
 four pods at 10m CPU / 32Mi each.

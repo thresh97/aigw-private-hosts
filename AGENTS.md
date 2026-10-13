@@ -10,7 +10,9 @@ run order. Gateway-side validation rules are documented in
   namespace, so check that `NS` isn't a namespace anything else uses.
 - **SCM tenant:**
   - org egress-allowlist entries, tagged with description `$TAG` (default `aigw-private-hosts`);
-  - AI Gateway integrations with the `tth-` slug prefix, bound to `$WS_ID`.
+  - AI Gateway integrations with the `tth-` slug prefix, bound to `$WS_ID`;
+  - with `wh-save`: guardrails, configs and service keys named `tth-wh-*` in `$WS_ID`. Their ids and key secrets are in
+    `$STATE` (default `~/.local/state/aigw-private-hosts`), which `cleanup` reads; don't delete it before cleanup.
 - **Gateway:** step 5 changes `TRUSTED_CUSTOM_HOSTS` and redeploys the hybrid gateway. That's a change to a shared
   data plane, so get the operator's go-ahead first and revert it at cleanup.
 
@@ -25,7 +27,7 @@ run order. Gateway-side validation rules are documented in
   files. Use placeholders (`<gateway>`, `<workspace uuid>`).
 - **Only touch tagged objects.**
   - `matrix.sh scm-del` deletes allowlist entries whose description is exactly `$TAG`.
-  - `matrix.sh cleanup` deletes integrations whose slug starts with `tth-`.
+  - `matrix.sh cleanup` deletes integrations whose slug starts with `tth-`, and the `tth-wh-*` objects recorded in `$STATE`.
   - Never delete untagged allowlist entries or other integrations. Other people's entries may be in the same org.
 - **The allowlist API pages at 20 entries.** List it with `?page_size=100` (the largest value accepted), or you'll miss
   entries.

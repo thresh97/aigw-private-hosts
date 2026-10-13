@@ -35,7 +35,8 @@ still has its own trust list. It isn't obvious which one does what, so this kit 
 ## Summary
 
 Tested on gateway 2.26.0 (2026-10-06) and 2.27.0 (2026-10-09), in two lab tenants; behaviour may change in later releases. Details are in
-[Findings](#findings), which also covers webhook guardrail URLs (2026-10-13): the `cluster.local` block applies to them too.
+[Findings](#findings), which also covers webhook guardrail URLs (2.27.0, 2026-10-13). They follow the same call rules,
+but SCM saves any webhook URL, so the SCM column doesn't apply to them.
 
 | | SCM org allowlist | `TRUSTED_CUSTOM_HOSTS` env var |
 |---|---|---|
@@ -138,13 +139,14 @@ request, with header values masked; read them with `kubectl logs -n aigw-mock -l
 | 3b. Optional: save the webhook guardrails | airs-cli host | `MGMT_CREDS_FILE=… WS_ID=… bash matrix.sh wh-save hosts.tsv > results/wh-saved.tsv` |
 | 4. Probe, env var unchanged | gateway client | `GW_URL=https://<gateway> GW_KEY=<key or JWT> bash probe.sh results/saved.tsv before-env >> results/probe.tsv` (and `probe.sh results/wh-saved.tsv before-env >> results/wh-probe.tsv`, same host as 3b: it reads the keys from `$STATE`) |
 | 5. Add the env-var hosts | gateway deploy | `bash matrix.sh env hosts.tsv \| tee results/env.txt`, append that to `TRUSTED_CUSTOM_HOSTS` and redeploy the gateway. If you change the env var again later, save each value the same way (`results/env2.txt`, …) |
-| 6. Probe again | gateway client | `… bash probe.sh results/saved.tsv after-env >> results/probe.tsv` |
+| 6. Probe again | gateway client | `… bash probe.sh results/saved.tsv after-env >> results/probe.tsv` (and the same for `results/wh-saved.tsv`) |
 | 7. Optional: remove the SCM entries, probe and edit again | both | `matrix.sh scm-del`, then `probe.sh … after-scm-del` and `matrix.sh edit > results/edit.tsv` |
 | 8. Clean up | all | revert the env var and redeploy; `matrix.sh scm-del`; `matrix.sh cleanup`; `KCTX=<ctx> bash teardown.sh` |
 
 The `matrix.sh save` output records whether SCM accepted each custom host, and the reason when it refused. In `probe.sh`
-output, each row is `reached` (the mock answered), `refused` (the gateway returned "Invalid custom host") or `error`
-(for example the gateway's DNS-rebinding block, or a name that doesn't resolve). `matrix.sh edit` output has one row
+output, each row is `reached` (the mock answered), `refused` (the gateway returned "Invalid custom host", or for a
+webhook "rejected by SSRF policy") or `error` (for example the gateway's DNS-rebinding block, a name that doesn't
+resolve, or a webhook `fetch failed`). `matrix.sh edit` output has one row
 per integration and edit kind (`description`, or `base-url` re-set to the same URL): `ok`, or `refused` with the reason.
 
 `matrix.sh` tags everything it creates: allowlist entries get the description `aigw-private-hosts` and integrations get
@@ -217,16 +219,29 @@ What this means:
 
 **Webhook guardrail URLs (gateway)**
 
-Tested 2026-10-13 against 2.27.0, with a webhook guardrail (`default.webhook`) whose `webhookURL` was a Service in the
-gateway's own namespace, `http://<svc>.<gateway-namespace>.svc.cluster.local/`, and `*.<gateway-namespace>.svc.cluster.local`
-in `TRUSTED_CUSTOM_HOSTS`:
-- The gateway never connected. Every request reported `Webhook error: webhookURL rejected by SSRF policy`: 446 with
-  `failOnError: true`, and 200 with no webhook rule applied with `failOnError: false`.
-- SCM saved the guardrail with that URL and no allowlist entry.
+Tested 2026-10-13 against 2.27.0 on EKS, with a webhook guardrail (`default.webhook`, `failOnError: true`) per cell
+and host form (step 3b), and separately with a real webhook in the gateway's own namespace (article `aigw-byo-guardrail`).
 
-So the `cluster.local` block also covers webhook URLs, and unlike MCP, an env wildcard doesn't get past it. Other host
-forms (`.svc`, `<svc>.<ns>`, IPs) haven't been tested for webhooks yet. The related article `aigw-byo-guardrail` has
-a webhook to try them with.
+| Webhook URL | Not in env | In env |
+|---|---|---|
+| Public host | reached | – |
+| Private IP (ClusterIP, pod IP) | refused, "rejected by SSRF policy" | **reached** (no SCM entry needed) |
+| `<svc>.<ns>.svc`, `<svc>.<ns>` | error, "fetch failed" | **reached** (exact entry) |
+| `*.svc.cluster.local`, `*.compute.internal` | refused, "rejected by SSRF policy" | **still refused**, with exact or wildcard entries |
+| SCM entry only, any form | as "not in env" | – |
+
+- **SCM doesn't check webhook URLs.** It saved every one of them, including private IPs and `*.compute.internal` names
+  with no allowlist entry.
+- The gateway reports the reason as `Webhook error: <reason>` in the guardrail result. A refused or failed webhook
+  gives 446 with `failOnError: true`, and 200 with no webhook rule applied with `failOnError: false`. The mock received
+  a request only for the "reached" rows.
+- `fetch failed` is also what a trusted webhook URL gives when nothing answers (a Service with no endpoints), so on its
+  own it doesn't tell an untrusted `.svc` name from a webhook that's down.
+
+So webhook URLs follow the same call rules as integration custom hosts: `TRUSTED_CUSTOM_HOSTS` decides, and the
+`cluster.local` block applies (unlike MCP, an env wildcard doesn't get past it). Address an in-cluster webhook as
+`<svc>.<ns>.svc` or `<svc>.<ns>` with an exact env entry. The difference is that SCM has no save-time check, so a
+private-IP webhook needs only the env entry.
 
 ## Future work
 

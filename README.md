@@ -44,7 +44,7 @@ but SCM saves any webhook URL, so the SCM column doesn't apply to them.
 | **What it affects** | Whether an integration with a private custom host can be **saved** (or its base URL edited) | Whether the gateway will **call** a private custom host |
 | **When it's checked** | Save time, in the control plane | Every request, in the gateway |
 | **Effect on calls** | None: adding or removing entries doesn't change what the gateway calls | Decides it, apart from a built-in denylist |
-| **Entry format** | One host per entry: exact host, IP literal or `*.wildcard` (no CIDR, port or scheme) | Comma-separated: exact hosts, IPs and `*.wildcards` |
+| **Entry format** | One host per entry: exact host, IP literal or `*.wildcard` (no CIDR, port or scheme) | Comma-separated: exact hosts, IPs and `*.wildcards` (matched by name suffix; a CIDR had no effect) |
 
 In practice:
 
@@ -180,7 +180,7 @@ them all.
 ## Findings
 
 Tested 2026-10-06 against gateway 2.26.0 and 2026-10-09 against 2.27.0, on EKS in two lab tenants, with the same
-results. Everything below was observed through the API and the probe, except where marked *(image inspection)* or
+results. Namespace wildcards, CIDRs and webhook URLs were added 2026-10-13 (2.27.0). Everything below was observed through the API and the probe, except where marked *(image inspection)* or
 *(2.26.0 only)*.
 
 The control plane checks the SCM list when an integration is saved. The gateway checks only `TRUSTED_CUSTOM_HOSTS`,
@@ -208,7 +208,8 @@ What the SCM list itself accepts:
 |---|---|---|
 | Public host | reached | – |
 | Private IP | refused, "Invalid custom host" | **reached**, but only if SCM let it be saved first. Removing the SCM entry later doesn't affect calls. |
-| `<svc>.<ns>.svc`, `<svc>.<ns>` | refused (DNS-rebinding block) | **reached** (exact entry) |
+| `<svc>.<ns>.svc`, `<svc>.<ns>` | refused (DNS-rebinding block) | **reached**, with an exact entry or a wildcard of the same form: `*.<ns>.svc` covers `<svc>.<ns>.svc` and `*.<ns>` covers `<svc>.<ns>`, but neither covers the other form |
+| Private IP or in-cluster name, env has only a CIDR covering its address (`/24` tested) | – | **still refused**: the CIDR had no effect, for IP URLs or for names resolving into it |
 | `*.svc.cluster.local`, `*.compute.internal` | refused | **still refused**, with exact or wildcard entries |
 | `*.ec2.internal` | refused | **still refused**, with a wildcard entry |
 | Other private names (`.corp`, `.lan`, other `.internal`) | refused | passes the gateway check (the env wildcard works; the test names don't resolve) |
@@ -227,6 +228,7 @@ The docs don't cover the SCM allowlist or the save-time check.
 What this means:
 - **Private IPs need both lists:** the SCM list so the integration can be saved, and `TRUSTED_CUSTOM_HOSTS` so the gateway will call it.
 - **Use a name the gateway can trust.** In-cluster LLM upstreams should be addressed as `<svc>.<ns>.svc` or `<svc>.<ns>`, not `.svc.cluster.local`. Both save without an SCM entry and need only an env entry.
+- **One entry per namespace and form.** `*.<ns>.svc` trusts every Service in that namespace as `<svc>.<ns>.svc`, so new Services need no gateway change. Wildcards match the name as written: `<svc>.<ns>` needs `*.<ns>` as well, and a trusted name passes although it resolves to a private ClusterIP. There's no range form: IPs need exact entries.
 - **SCM accepts integrations that can never work.** It saves `.svc.cluster.local` hosts with no list entry, and `*.compute.internal` hosts once listed, but the gateway always refuses them.
 - **Don't trust loopback.** `127.0.0.1` or `localhost` in `TRUSTED_CUSTOM_HOSTS` (plus an SCM entry) lets an integration reach whatever listens on the gateway pod's own loopback.
 - **MCP is different.** *(2.26.0 only)* In the same deployment, MCP servers on `*.<gateway-namespace>.svc.cluster.local` work through the gateway's MCP endpoint with an env wildcard, so this denylist doesn't apply to the MCP path. Not tested further here.
@@ -240,7 +242,8 @@ and host form (step 3b), and separately with a real webhook in the gateway's own
 |---|---|---|
 | Public host | reached | – |
 | Private IP (ClusterIP, pod IP) | refused, "rejected by SSRF policy" | **reached** (no SCM entry needed) |
-| `<svc>.<ns>.svc`, `<svc>.<ns>` | error, "fetch failed" | **reached** (exact entry) |
+| `<svc>.<ns>.svc`, `<svc>.<ns>` | error, "fetch failed" | **reached**, with an exact entry or a wildcard of the same form (as for integrations) |
+| Private IP or in-cluster name, env has only a CIDR covering its address | – | **still refused** |
 | `*.svc.cluster.local`, `*.compute.internal` | refused, "rejected by SSRF policy" | **still refused**, with exact or wildcard entries |
 | SCM entry only, any form | as "not in env" | – |
 
@@ -254,7 +257,7 @@ and host form (step 3b), and separately with a real webhook in the gateway's own
 
 So webhook URLs follow the same call rules as integration custom hosts: `TRUSTED_CUSTOM_HOSTS` decides, and the
 `cluster.local` block applies (unlike MCP, an env wildcard doesn't get past it). Address an in-cluster webhook as
-`<svc>.<ns>.svc` or `<svc>.<ns>` with an exact env entry. The difference is that SCM has no save-time check, so a
+`<svc>.<ns>.svc` or `<svc>.<ns>` with an exact env entry, or `*.<ns>.svc` / `*.<ns>` for the whole namespace. The difference is that SCM has no save-time check, so a
 private-IP webhook needs only the env entry.
 
 ## Future work

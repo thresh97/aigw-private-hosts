@@ -24,7 +24,7 @@ while IFS=$'\t' read -r slug cell url state _; do
     *"mock cell="*) verdict=reached; detail=$(grep -o 'mock cell=[^"]*' <<<"$body" | head -1) ;;
     *httpbin.org*) verdict=reached; detail=public ;;
     *"Invalid custom host"*) verdict=refused; detail="Invalid custom host" ;;
-    *"rejected by SSRF policy"*) verdict=refused; detail=$(grep -o 'Webhook error: [^"]*' <<<"$body" | head -1) ;;
+    *"Webhook error: webhookURL rejected by SSRF policy"*) verdict=refused; detail="Webhook error: webhookURL rejected by SSRF policy" ;;
     *) verdict=error  # the body can be plain text (e.g. "Message: fetch failed Cause: DnsRebindingBlockedError ...")
        detail=$(jq -r '(.hook_results.before_request_hooks // [])[0].checks[0].data.explanation? // .error.message? // empty' \
          <<<"$body" 2>/dev/null | head -1 || true); [ -n "$detail" ] || detail=$(cut -c1-160 <<<"$body") ;;

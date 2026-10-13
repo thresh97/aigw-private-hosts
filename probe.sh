@@ -25,8 +25,9 @@ while IFS=$'\t' read -r slug cell url state _; do
     *httpbin.org*) verdict=reached; detail=public ;;
     *"Invalid custom host"*) verdict=refused; detail="Invalid custom host" ;;
     *"rejected by SSRF policy"*) verdict=refused; detail=$(grep -o 'Webhook error: [^"]*' <<<"$body" | head -1) ;;
-    *) verdict=error; detail=$(jq -r '(.hook_results.before_request_hooks // [])[0].checks[0] | .data.explanation? // .error.message? // empty' \
-         <<<"$body" 2>/dev/null | head -1); [ -n "$detail" ] || detail=$(cut -c1-160 <<<"$body") ;;
+    *) verdict=error  # the body can be plain text (e.g. "Message: fetch failed Cause: DnsRebindingBlockedError ...")
+       detail=$(jq -r '(.hook_results.before_request_hooks // [])[0].checks[0].data.explanation? // .error.message? // empty' \
+         <<<"$body" 2>/dev/null | head -1 || true); [ -n "$detail" ] || detail=$(cut -c1-160 <<<"$body") ;;
   esac
   printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$label" "$slug" "$cell" "$url" "$code" "$verdict" "$detail"
 done < "$1"

@@ -6,13 +6,14 @@ run order. Gateway-side validation rules are documented in
 
 ## What running this touches
 
-- **Kubernetes:** one namespace (`$NS`, default `aigw-mock`) in the gateway's cluster. `teardown.sh` deletes that
-  namespace, so check that `NS` isn't a namespace anything else uses.
+- **Kubernetes:** one namespace (`$NS`, default `aigw-mock`) in the gateway's cluster, plus one per wildcard cell if
+  you deploy them (`aigw-mock-<cell>`). `teardown.sh` deletes the namespace, so check that `NS` isn't a namespace
+  anything else uses.
 - **SCM tenant:**
   - org egress-allowlist entries, tagged with description `$TAG` (default `aigw-private-hosts`);
   - AI Gateway integrations with the `tth-` slug prefix, bound to `$WS_ID`;
-  - with `wh-save`: guardrails, configs and service keys named `tth-wh-*` in `$WS_ID`. Their ids and key secrets are in
-    `$STATE` (default `~/.local/state/aigw-private-hosts`), which `cleanup` reads; don't delete it before cleanup.
+  - with `wh-save`: guardrails, configs and service keys named `tth-wh-*` in `$WS_ID`; with `probe-key`: a service
+    key `tth-probe`. Their ids and key secrets are in `$STATE` (default `~/.local/state/aigw-private-hosts`), which `cleanup` reads; don't delete it before cleanup.
 - **Gateway:** step 5 changes `TRUSTED_CUSTOM_HOSTS` and redeploys the hybrid gateway. That's a change to a shared
   data plane, so get the operator's go-ahead first and revert it at cleanup.
 
@@ -27,7 +28,7 @@ run order. Gateway-side validation rules are documented in
   files. Use placeholders (`<gateway>`, `<workspace uuid>`).
 - **Only touch tagged objects.**
   - `matrix.sh scm-del` deletes allowlist entries whose description is exactly `$TAG`.
-  - `matrix.sh cleanup` deletes integrations whose slug starts with `tth-`, and the `tth-wh-*` objects recorded in `$STATE`.
+  - `matrix.sh cleanup` deletes integrations whose slug starts with `tth-`, and the `tth-*` objects recorded in `$STATE`.
   - Never delete untagged allowlist entries or other integrations. Other people's entries may be in the same org.
 - **The allowlist API pages at 20 entries.** List it with `?page_size=100` (the largest value accepted), or you'll miss
   entries.
@@ -41,7 +42,7 @@ run order. Gateway-side validation rules are documented in
 1. Revert `TRUSTED_CUSTOM_HOSTS` and redeploy the gateway.
 2. `MGMT_CREDS_FILE=… bash matrix.sh scm-del`
 3. `MGMT_CREDS_FILE=… bash matrix.sh cleanup`
-4. `KCTX=<ctx> bash teardown.sh`
+4. `KCTX=<ctx> bash teardown.sh`, and again with `NS=aigw-mock-<cell>` for each wildcard cell
 
 ## Changing the code
 

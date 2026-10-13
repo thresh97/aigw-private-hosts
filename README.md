@@ -82,7 +82,8 @@ Script variables:
 | `TAG` | `matrix.sh` | no (`aigw-private-hosts`) | description put on allowlist entries; `scm-del` deletes only these |
 | `PUBLIC_URL` | `matrix.sh save` | no (`https://httpbin.org/anything`) | public control endpoint |
 | `GW_URL` | `probe.sh` | yes | gateway base URL, e.g. `https://<gateway>` |
-| `GW_KEY` | `probe.sh` | yes | gateway API key or JWT for `WS_ID`'s workspace |
+| `GW_KEY` | `probe.sh` | yes, for integration rows | gateway API key or JWT for `WS_ID`'s workspace (`matrix.sh probe-key` makes one) |
+| `CIDR_BITS` | `matrix.sh env` | no (`32`) | prefix length of the `wcidr` cell's env entries |
 
 ## Design
 
@@ -119,21 +120,34 @@ it as model `@<slug>/gpt-4o`. Saved integrations are used rather than the `x-por
 can block inline config, and because saving is where the SCM list is checked.
 
 The mock (`server.py`, stdlib only) answers OpenAI `…/chat/completions` and Anthropic `…/messages`. Its reply text is
-`mock cell=<cell> host=<Host>`, so the gateway's response shows which address it dialled.
+`mock cell=<cell> host=<Host>`, so the gateway's response shows which address it dialled. It logs one JSON line per
+request, with header values masked; read them with `kubectl logs -n aigw-mock -l app=aigw-private-hosts-mock`.
 
 **Webhook guardrail URLs** use the same cells and host forms, with `/webhook` in place of `/v1`. `matrix.sh wh-save`
 creates, per row, a webhook guardrail (`tth-wh-<cell>-<form>`, `failOnError: true`), a config that runs it as an input
 guardrail, and a service key for that config. The mock answers the webhook with `verdict: false` and its usual text, so
 a reached webhook shows up as a 446 that names the address. A refused URL also gives a 446, with the gateway's reason
 instead. Either way the config's upstream is never called. `tth-wh-public` (`PUBLIC_WEBHOOK_URL`, default `PUBLIC_URL`)
-is the public control. It logs one JSON line per
-request, with header values masked; read them with `kubectl logs -n aigw-mock -l app=aigw-private-hosts-mock`.
+is the public control.
+
+**Wildcard cells** test whether one `TRUSTED_CUSTOM_HOSTS` entry can cover a whole namespace or address range. Each
+runs in its own namespace, so its wildcard covers nothing else:
+
+| Cell | Namespace (suggested) | Env entry from `matrix.sh env` | SCM list |
+|---|---|---|---|
+| `wsvc` | `aigw-mock-wsvc` | `*.aigw-mock-wsvc.svc` | – |
+| `wns` | `aigw-mock-wns` | `*.aigw-mock-wns` | – |
+| `wcidr` | `aigw-mock-wcidr` | `<ClusterIP>/<bits>` and `<pod IP>/<bits>` (`CIDR_BITS`, default 32) | its two IPs, so its integrations save |
+
+Every wildcard cell still gets all six host forms, so the forms an entry shouldn't match act as controls. For example,
+`*.<ns>.svc` against `<svc>.<ns>`, or a CIDR against the cell's DNS names (which would show whether the gateway checks
+the name or the address it resolves to). `matrix.sh env` warns if a `wcidr` range also covers another cell's IP.
 
 ## Run
 
 | Step | Where | Command |
 |---|---|---|
-| 1. Deploy the mock | kubectl host | `KCTX=<ctx> bash deploy.sh > hosts.tsv` |
+| 1. Deploy the mock | kubectl host | `KCTX=<ctx> bash deploy.sh > hosts.tsv`. Optional wildcard cells: `for c in wsvc wns wcidr; do KCTX=<ctx> NS=aigw-mock-$c CELLS=$c bash deploy.sh; done >> hosts.tsv` |
 | 2. Add the SCM entries | airs-cli host | `MGMT_CREDS_FILE=<tenant json> bash matrix.sh scm-add hosts.tsv` |
 | 3. Save the integrations | airs-cli host | `MGMT_CREDS_FILE=… WS_ID=<workspace uuid> bash matrix.sh save hosts.tsv > results/saved.tsv` |
 | 3b. Optional: save the webhook guardrails | airs-cli host | `MGMT_CREDS_FILE=… WS_ID=… bash matrix.sh wh-save hosts.tsv > results/wh-saved.tsv` |
@@ -141,7 +155,7 @@ request, with header values masked; read them with `kubectl logs -n aigw-mock -l
 | 5. Add the env-var hosts | gateway deploy | `bash matrix.sh env hosts.tsv \| tee results/env.txt`, append that to `TRUSTED_CUSTOM_HOSTS` and redeploy the gateway. If you change the env var again later, save each value the same way (`results/env2.txt`, …) |
 | 6. Probe again | gateway client | `… bash probe.sh results/saved.tsv after-env >> results/probe.tsv` (and the same for `results/wh-saved.tsv`) |
 | 7. Optional: remove the SCM entries, probe and edit again | both | `matrix.sh scm-del`, then `probe.sh … after-scm-del` and `matrix.sh edit > results/edit.tsv` |
-| 8. Clean up | all | revert the env var and redeploy; `matrix.sh scm-del`; `matrix.sh cleanup`; `KCTX=<ctx> bash teardown.sh` |
+| 8. Clean up | all | revert the env var and redeploy; `matrix.sh scm-del`; `matrix.sh cleanup`; `KCTX=<ctx> bash teardown.sh` (and `NS=aigw-mock-<cell>` for each wildcard cell) |
 
 The `matrix.sh save` output records whether SCM accepted each custom host, and the reason when it refused. In `probe.sh`
 output, each row is `reached` (the mock answered), `refused` (the gateway returned "Invalid custom host", or for a

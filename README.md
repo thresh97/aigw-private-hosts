@@ -35,7 +35,7 @@ still has its own trust list. It isn't obvious which one does what, so this kit 
 ## Summary
 
 Tested on gateway 2.26.0 (2026-10-06) and 2.27.0 (2026-10-09), in two lab tenants; behaviour may change in later releases. Details are in
-[Findings](#findings).
+[Findings](#findings), which also covers webhook guardrail URLs (2026-10-13): the `cluster.local` block applies to them too.
 
 | | SCM org allowlist | `TRUSTED_CUSTOM_HOSTS` env var |
 |---|---|---|
@@ -203,6 +203,19 @@ What this means:
 - **SCM accepts integrations that can never work.** It saves `.svc.cluster.local` hosts with no list entry, and `*.compute.internal` hosts once listed, but the gateway always refuses them.
 - **Don't trust loopback.** `127.0.0.1` or `localhost` in `TRUSTED_CUSTOM_HOSTS` (plus an SCM entry) lets an integration reach whatever listens on the gateway pod's own loopback.
 - **MCP is different.** *(2.26.0 only)* In the same deployment, MCP servers on `*.<gateway-namespace>.svc.cluster.local` work through the gateway's MCP endpoint with an env wildcard, so this denylist doesn't apply to the MCP path. Not tested further here.
+
+**Webhook guardrail URLs (gateway)**
+
+Tested 2026-10-13 against 2.27.0, with a webhook guardrail (`default.webhook`) whose `webhookURL` was a Service in the
+gateway's own namespace, `http://<svc>.<gateway-namespace>.svc.cluster.local/`, and `*.<gateway-namespace>.svc.cluster.local`
+in `TRUSTED_CUSTOM_HOSTS`:
+- The gateway never connected. Every request reported `Webhook error: webhookURL rejected by SSRF policy`: 446 with
+  `failOnError: true`, and 200 with no webhook rule applied with `failOnError: false`.
+- SCM saved the guardrail with that URL and no allowlist entry.
+
+So the `cluster.local` block also covers webhook URLs, and unlike MCP, an env wildcard doesn't get past it. Other host
+forms (`.svc`, `<svc>.<ns>`, IPs) haven't been tested for webhooks yet. The related article `aigw-byo-guardrail` has
+a webhook to try them with.
 
 ## Future work
 
